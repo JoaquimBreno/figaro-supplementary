@@ -14,17 +14,17 @@ from input_representation import remi2midi
 
 MODEL = os.getenv('MODEL', '')
 
-ROOT_DIR = os.getenv('ROOT_DIR', './lmd_full')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/figaro/figaro-supplementary/data')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples2')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
-MAX_ITER = int(os.getenv('MAX_ITER', 16_000))
+MAX_ITER = int(os.getenv('MAX_ITER', 8_000))
 MAX_BARS = int(os.getenv('MAX_BARS', 32))
 
 MAKE_MEDLEYS = os.getenv('MAKE_MEDLEYS', 'False') == 'True'
 N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 16))
   
-CHECKPOINT = os.getenv('CHECKPOINT', None)
+CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/figaro/figaro-supplementary/outputs/figaro-expert/step=36999-valid_loss=0.92.ckpt")
 VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))

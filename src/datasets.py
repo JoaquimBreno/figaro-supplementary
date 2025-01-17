@@ -231,7 +231,12 @@ class MidiDataset(IterableDataset):
     else:
       self.latent_cache_path = None
 
+  def __len__(self):
+      return len(self.files)
 
+  def __getitem__(self, index):
+      print(f"Fetching item at index: {index}")
+      
   def __iter__(self):
     worker_info = torch.utils.data.get_worker_info()
     self.split = _get_split(self.files, worker_info)

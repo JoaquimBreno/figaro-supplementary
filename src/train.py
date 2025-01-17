@@ -1,5 +1,3 @@
-
-
 import torch
 
 import os
@@ -10,11 +8,14 @@ import pytorch_lightning as pl
 from models.seq2seq import Seq2SeqModule
 from models.vae import VqVaeModule
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import TQDMProgressBar
+
+progress_bar = TQDMProgressBar(refresh_rate=5)  # Set the refresh rate as needed
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-ROOT_DIR = os.getenv('ROOT_DIR', './lmd_full')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', './results')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/figaro/figaro-supplementary/data')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/home/your_email/figaro/figaro-supplementary/outputs')
 LOGGING_DIR = os.getenv('LOGGING_DIR', './logs')
 MAX_N_FILES = int(os.getenv('MAX_N_FILES', -1))
 
@@ -214,12 +215,11 @@ def main():
   )
 
   trainer = pl.Trainer(
-    gpus=0 if device.type == 'cpu' else torch.cuda.device_count(),
-    auto_select_gpus=True,
+    gpus=2,  # Use 2 GPUs
+    strategy='ddp',  # Use Distributed Data Parallel
     precision=16,  # Use mixed precision
-    accelerator='dp',
     profiler='simple',
-    callbacks=[checkpoint_callback, lr_monitor],
+    callbacks=[checkpoint_callback, lr_monitor, progress_bar],
     max_epochs=EPOCHS,
     max_steps=MAX_TRAINING_STEPS,
     log_every_n_steps=max(100, min(25*ACCUMULATE_GRADS, 200)),
