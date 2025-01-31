@@ -16,6 +16,8 @@ from transformers import (
   EncoderDecoderModel
 )
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 class GroupEmbedding(nn.Module):
   def __init__(self, n_tokens, n_groups, out_dim, inner_dim=128):
     super().__init__()
@@ -64,7 +66,6 @@ class Seq2SeqModule(pl.LightningModule):
     self.lr_schedule = lr_schedule
     self.warmup_steps = warmup_steps
     self.max_steps = max_steps
-
     self.vocab = RemiVocab()
 
     encoder_config = BertConfig(
@@ -216,9 +217,9 @@ class Seq2SeqModule(pl.LightningModule):
     
   def get_loss(self, batch, return_logits=False):
     # Shape of x: (batch_size, seq_len, tuple_size)
-    x = batch['input_ids']
-    bar_ids = batch['bar_ids']
-    position_ids = batch['position_ids']
+    x = batch['input_ids'].to(self.device)
+    bar_ids = batch['bar_ids'].to(self.device)
+    position_ids = batch['position_ids'].to(self.device)
     # Shape of labels: (batch_size, tgt_len, tuple_size)
     labels = batch['labels']
 
@@ -333,7 +334,7 @@ class Seq2SeqModule(pl.LightningModule):
       z, desc_bar_ids = None, None
       
 
-    is_done = torch.zeros(batch_size, dtype=torch.bool)
+    is_done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
 
     # Precompute encoder hidden states for cross-attention
     if self.description_flavor == 'latent':
@@ -341,7 +342,7 @@ class Seq2SeqModule(pl.LightningModule):
     else:
       encoder_hidden_states = None
 
-    curr_bars = torch.zeros(batch_size).fill_(-1)
+    curr_bars = torch.zeros(batch_size, device=self.device).fill_(-1)
     # Sample using decoder until max_length is reached or all sequences are done
     for i in range(curr_len - 1, max_length):
       # print(f"\r{i+1}/{max_length}", end='')
@@ -361,8 +362,8 @@ class Seq2SeqModule(pl.LightningModule):
         curr_bars = next_bars
 
         if bars_changed:
-          z_ = torch.zeros(batch_size, self.context_size, dtype=torch.int)
-          desc_bar_ids_ = torch.zeros(batch_size, self.context_size, dtype=torch.int)
+          z_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=self.device)
+          desc_bar_ids_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=self.device)
 
           for j in range(batch_size):
             curr_bar = bar_ids_[j, 0]
@@ -393,18 +394,18 @@ class Seq2SeqModule(pl.LightningModule):
       pr = pr.view(-1, pr.size(-1))
 
       next_token_ids = torch.multinomial(pr, 1).view(-1).to(x.device)
-      next_tokens = self.vocab.decode(next_token_ids)
+      next_tokens = self.vocab.decode(next_token_ids.cpu())
       if verbose:
         print(f"{i+1}/{max_length}", next_tokens)
 
 
-      next_bars = torch.tensor([1 if f'{BAR_KEY}_' in token else 0 for token in next_tokens], dtype=torch.int)
+      next_bars = torch.tensor([1 if f'{BAR_KEY}_' in token else 0 for token in next_tokens], dtype=torch.int,device=self.device)
       next_bar_ids = bar_ids[:, i].clone() + next_bars
 
       next_positions = [f"{POSITION_KEY}_0" if f'{BAR_KEY}_' in token else token for token in next_tokens]
       next_positions = [int(token.split('_')[-1]) if f'{POSITION_KEY}_' in token else None for token in next_positions]
-      next_positions = [pos if next_pos is None else next_pos for pos, next_pos in zip(position_ids[:, i], next_positions)]
-      next_position_ids = torch.tensor(next_positions, dtype=torch.int)
+      next_positions = [pos if next_pos is None else next_pos for pos, next_pos in zip(position_ids[:, i].cpu().tolist(), next_positions)]
+      next_position_ids = torch.tensor(next_positions, dtype=torch.int, device=self.device)
 
       is_done.masked_fill_((next_token_ids == eos_token_id).all(dim=-1), True)
       next_token_ids[is_done] = pad_token_id

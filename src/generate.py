@@ -14,20 +14,22 @@ from input_representation import remi2midi
 
 MODEL = os.getenv('MODEL', '')
 
-ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/figaro/figaro-supplementary/data')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples2')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/data')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples3')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
 MAX_ITER = int(os.getenv('MAX_ITER', 8_000))
 MAX_BARS = int(os.getenv('MAX_BARS', 32))
 
-MAKE_MEDLEYS = os.getenv('MAKE_MEDLEYS', 'False') == 'True'
+MAKE_MEDLEYS = False
 N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 16))
   
-CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/figaro/figaro-supplementary/outputs/figaro-expert/step=36999-valid_loss=0.92.ckpt")
-VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
+CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/your_email/figaro/figaro-supplementary/outputs/figaro-expert/step=37999-valid_loss=0.94.ckpt")
+VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/checkpoints/vq-vae.ckpt')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def reconstruct_sample(model, batch, 
   initial_context=1, 
@@ -38,12 +40,12 @@ def reconstruct_sample(model, batch,
 ):
   batch_size, seq_len = batch['input_ids'].shape[:2]
 
-  batch_ = { key: batch[key][:, :initial_context] for key in ['input_ids', 'bar_ids', 'position_ids'] }
+  batch_ = { key: batch[key][:, :initial_context].to(device) for key in ['input_ids', 'bar_ids', 'position_ids'] }
   if model.description_flavor in ['description', 'both']:
-    batch_['description'] = batch['description']
-    batch_['desc_bar_ids'] = batch['desc_bar_ids']
+    batch_['description'] = batch['description'].to(device)
+    batch_['desc_bar_ids'] = batch['desc_bar_ids'].to(device)
   if model.description_flavor in ['latent', 'both']:
-    batch_['latents'] = batch['latents']
+    batch_['latents'] = batch['latents'].to(device)
 
   max_len = seq_len + 1024
   if max_iter > 0:
@@ -76,14 +78,17 @@ def reconstruct_sample(model, batch,
     os.makedirs(os.path.join(output_dir, 'gt'), exist_ok=True)
     for pm, pm_hat, file in zip(pms, pms_hat, batch['files']):
       if verbose:
+        file.split()
         print(f"Saving to {output_dir}/{file}")
-      pm.write(os.path.join(output_dir, 'gt', file))
+      # pm.write(os.path.join(output_dir, 'gt', file))
       pm_hat.write(os.path.join(output_dir, file))
 
   return events
 
 
 def main():
+  print(f"Using device: {device}")
+  
   if MAKE_MEDLEYS:
     max_bars = N_MEDLEY_PIECES * N_MEDLEY_BARS
   else:
@@ -109,8 +114,19 @@ def main():
     vae_module.cpu()
   else:
     vae_module = None
+  if os.path.exists(CHECKPOINT):
+      print(f"O caminho {CHECKPOINT} existe.")
+  else:
+      print(f"O caminho {CHECKPOINT} não existe.")
+
+  # Verifica se o caminho especificado é de um arquivo
+  if os.path.isfile(CHECKPOINT):
+      print(f"O caminho {CHECKPOINT} é um arquivo.")
+  else:
+      print(f"O caminho {CHECKPOINT} não é um arquivo ou não existe.")
 
   model = Seq2SeqModule.load_from_checkpoint(CHECKPOINT)
+  model.to(device)
   model.freeze()
   model.eval()
 
