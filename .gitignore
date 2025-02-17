@@ -2,3 +2,7 @@ data/
 outputs/
 checkpoints/
 temp/
+samples*
+selected_balance/
+samples3/
+*.csv

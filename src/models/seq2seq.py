@@ -8,7 +8,7 @@ from datasets import MidiDataModule
 from vocab import RemiVocab, DescriptionVocab
 from constants import PAD_TOKEN, EOS_TOKEN, BAR_KEY, POSITION_KEY
 
-
+import torch.cuda.amp as amp
 import transformers
 from transformers import (
   BertConfig,
@@ -301,128 +301,107 @@ class Seq2SeqModule(pl.LightningModule):
 
   @torch.no_grad()
   def sample(self, batch, 
-    max_length=256, 
-    max_bars=-1,
-    temp=0.8,
-    pad_token=PAD_TOKEN, 
-    eos_token=EOS_TOKEN,
-    verbose=0,
+      max_length=256, 
+      max_bars=-1,
+      temp=0.8,
+      pad_token=PAD_TOKEN, 
+      eos_token=EOS_TOKEN,
+      verbose=0,
   ):
-    
-    # Setup and parsing arguments
+    self.eval()  # Ensure the model is in eval mode
 
     pad_token_id = self.vocab.to_i(pad_token)
     eos_token_id = self.vocab.to_i(eos_token)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     batch_size, curr_len = batch['input_ids'].shape
+    x = batch['input_ids'].to(device)
+    bar_ids = batch['bar_ids'].to(device)
+    position_ids = batch['position_ids'].to(device)
 
-    i = curr_len - 1
-
-    x = batch['input_ids']
-    bar_ids = batch['bar_ids']
-    position_ids = batch['position_ids']
-    assert x.shape[:2] == bar_ids.shape and x.shape[:2] == position_ids.shape, f"Input, bar and position ids weren't of compatible shapes: {x.shape}, {bar_ids.shape}, {position_ids.shape}"
-    
     if self.description_flavor == 'both':
-      z = { 'latents': batch['latents'], 'description': batch['description'] }
-      desc_bar_ids = batch['desc_bar_ids']
+        z = { 'latents': batch['latents'].to(device), 'description': batch['description'].to(device) }
+        desc_bar_ids = batch['desc_bar_ids'].to(device)
     elif self.description_flavor == 'latent':
-      z, desc_bar_ids = batch['latents'], None
+        z, desc_bar_ids = batch['latents'].to(device), None
     elif self.description_flavor == 'description':
-      z, desc_bar_ids = batch['description'], batch['desc_bar_ids']
+        z, desc_bar_ids = batch['description'].to(device), batch['desc_bar_ids'].to(device)
     else:
-      z, desc_bar_ids = None, None
-      
+        z, desc_bar_ids = None, None
 
-    is_done = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+    is_done = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-    # Precompute encoder hidden states for cross-attention
-    if self.description_flavor == 'latent':
-      encoder_hidden_states = self.encode(z, desc_bar_ids)
-    else:
-      encoder_hidden_states = None
+    # Cache the encoder hidden states if applicable
+    encoder_hidden_states = self.encode(z, desc_bar_ids) if self.description_flavor in ['latent', 'both'] else None
 
-    curr_bars = torch.zeros(batch_size, device=self.device).fill_(-1)
-    # Sample using decoder until max_length is reached or all sequences are done
-    for i in range(curr_len - 1, max_length):
-      # print(f"\r{i+1}/{max_length}", end='')
-      x_ = x[:, -self.context_size:].to(self.device)
-      bar_ids_ = bar_ids[:, -self.context_size:].to(self.device)
-      position_ids_ = position_ids[:, -self.context_size:].to(self.device)
+    curr_bars = torch.zeros(batch_size, device=device).fill_(-1)
+    with amp.autocast():  # Use AMP for faster inference on supported GPUs
+      for i in range(curr_len - 1, max_length):
+          print(f"\r{i+1}/{max_length}", end='')
 
-      # Description scrolling
-      if self.description_flavor in ['description', 'both']:
-        if self.description_flavor == 'description':
-          desc = z
-        else:
-          desc = z['description']
-        
-        next_bars = bar_ids_[:, 0]
-        bars_changed = not (next_bars == curr_bars).all()
-        curr_bars = next_bars
-
-        if bars_changed:
-          z_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=self.device)
-          desc_bar_ids_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=self.device)
-
-          for j in range(batch_size):
-            curr_bar = bar_ids_[j, 0]
-            indices = torch.nonzero(desc_bar_ids[j] == curr_bar)
-            if indices.size(0) > 0:
-              idx = indices[0, 0]
-            else:
-              idx = desc.size(1) - 1
-
-            offset = min(self.context_size, desc.size(1) - idx)
-
-            z_[j, :offset] = desc[j, idx:idx+offset]
-            desc_bar_ids_[j, :offset] = desc_bar_ids[j, idx:idx+offset]
-
-          z_, desc_bar_ids_ = z_.to(self.device), desc_bar_ids_.to(self.device)
-
-          if self.description_flavor == 'both':
-            z_ = { 'description': z_, 'latents': z['latents'] }
+          x_ = x[:, -self.context_size:]
+          bar_ids_ = bar_ids[:, -self.context_size:]
+          position_ids_ = position_ids[:, -self.context_size:]
           
-          encoder_hidden_states = self.encode(z_, desc_bar_ids_)
+          if self.description_flavor in ['description', 'both']:
+              if self.description_flavor == 'description':
+                  desc = z
+              else:
+                  desc = z['description']
 
-      logits = self.decode(x_, bar_ids=bar_ids_, position_ids=position_ids_, encoder_hidden_states=encoder_hidden_states)
+              next_bars = bar_ids_[:, 0]
+              bars_changed = not (next_bars == curr_bars).all()
+              curr_bars = next_bars
 
-      idx = min(self.context_size - 1, i)
-      logits = logits[:, idx] / temp
+              if bars_changed:
+                  z_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=device)
+                  desc_bar_ids_ = torch.zeros(batch_size, self.context_size, dtype=torch.int, device=device)
+                  
+                  for j in range(batch_size):
+                      curr_bar = bar_ids_[j, 0]
+                      indices = torch.nonzero(desc_bar_ids[j] == curr_bar)
+                      idx = indices[0, 0] if indices.size(0) > 0 else desc.size(1) - 1
+                      offset = min(self.context_size, desc.size(1) - idx)
+                      z_[j, :offset] = desc[j, idx:idx+offset]
+                      desc_bar_ids_[j, :offset] = desc_bar_ids[j, idx:idx+offset]
 
-      pr = F.softmax(logits, dim=-1)
-      pr = pr.view(-1, pr.size(-1))
+                  if self.description_flavor == 'both':
+                      z_ = { 'description': z_, 'latents': z['latents'] }
 
-      next_token_ids = torch.multinomial(pr, 1).view(-1).to(x.device)
-      next_tokens = self.vocab.decode(next_token_ids.cpu())
-      if verbose:
-        print(f"{i+1}/{max_length}", next_tokens)
+                  encoder_hidden_states = self.encode(z_, desc_bar_ids_)
 
+        
+          logits = self.decode(x_, bar_ids=bar_ids_, position_ids=position_ids_, encoder_hidden_states=encoder_hidden_states)
+          idx = min(self.context_size - 1, i)
+          logits = logits[:, idx] / temp
+          pr = F.softmax(logits, dim=-1)
+              
+          pr = pr.contiguous().view(-1, pr.size(-1))  # Ensure contiguous memory for performance
+          next_token_ids = torch.multinomial(pr, num_samples=1).view(-1)
+          next_tokens = self.vocab.decode(next_token_ids.cpu())
 
-      next_bars = torch.tensor([1 if f'{BAR_KEY}_' in token else 0 for token in next_tokens], dtype=torch.int,device=self.device)
-      next_bar_ids = bar_ids[:, i].clone() + next_bars
+          next_bars = torch.tensor([1 if f'{BAR_KEY}_' in token else 0 for token in next_tokens], dtype=torch.int, device=device)
+          next_bar_ids = bar_ids[:, i].clone() + next_bars
+          next_positions = [f"{POSITION_KEY}_0" if f'{BAR_KEY}_' in token else token for token in next_tokens]
+          next_positions = [int(token.split('_')[-1]) if f'{POSITION_KEY}_' in token else None for token in next_positions]
+          next_positions = [pos if next_pos is None else next_pos for pos, next_pos in zip(position_ids[:, i].cpu().tolist(), next_positions)]
+          next_position_ids = torch.tensor(next_positions, dtype=torch.int, device=device)
 
-      next_positions = [f"{POSITION_KEY}_0" if f'{BAR_KEY}_' in token else token for token in next_tokens]
-      next_positions = [int(token.split('_')[-1]) if f'{POSITION_KEY}_' in token else None for token in next_positions]
-      next_positions = [pos if next_pos is None else next_pos for pos, next_pos in zip(position_ids[:, i].cpu().tolist(), next_positions)]
-      next_position_ids = torch.tensor(next_positions, dtype=torch.int, device=self.device)
+          is_done.masked_fill_((next_token_ids == eos_token_id).all(dim=-1), True)
+          next_token_ids[is_done] = pad_token_id
+          
+          if max_bars > 0:
+              is_done.masked_fill_(next_bar_ids >= max_bars + 1, True)
+          
+          x = torch.cat([x, next_token_ids.clone().unsqueeze(1)], dim=1)
+          bar_ids = torch.cat([bar_ids, next_bar_ids.unsqueeze(1)], dim=1)
+          position_ids = torch.cat([position_ids, next_position_ids.unsqueeze(1)], dim=1)
 
-      is_done.masked_fill_((next_token_ids == eos_token_id).all(dim=-1), True)
-      next_token_ids[is_done] = pad_token_id
-      if max_bars > 0:
-        is_done.masked_fill_(next_bar_ids >= max_bars + 1, True)
-
-      x = torch.cat([x, next_token_ids.clone().unsqueeze(1)], dim=1)
-      bar_ids = torch.cat([bar_ids, next_bar_ids.unsqueeze(1)], dim=1)
-      position_ids = torch.cat([position_ids, next_position_ids.unsqueeze(1)], dim=1)
-
-      if torch.all(is_done):
-        break
-    # print()
-
+          if is_done.all():
+              break
+            
     return {
-      'sequences': x,
-      'bar_ids': bar_ids,
-      'position_ids': position_ids
+        'sequences': x,
+        'bar_ids': bar_ids,
+        'position_ids': position_ids
     }
-

@@ -207,7 +207,7 @@ class MidiDataset(IterableDataset):
     self.description_flavor = description_flavor
     if self.description_flavor in ['latent', 'both']:
       assert vae_module is not None
-      self.vae_module = vae_module.cpu()
+      self.vae_module = vae_module.to('cuda')
       self.vae_module.eval()
       self.vae_module.freeze()
     self.description_options = description_options

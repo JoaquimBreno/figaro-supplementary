@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from multiprocessing import Pool
 from functools import partial
-
+import ast
 
 
 def process_midi_file(folder_path, filename):
@@ -29,7 +29,20 @@ def process_midi_file(folder_path, filename):
             
             has_more_than_one_time_signature = len(set(time_signature)) > 1
             has_more_than_one_tempo = len(set(tempi)) > 1
-        
+            print(instruments)
+            
+            print(f"Processed {filename}")
+            print({
+                'filename': filename,
+                'instrument': [instrument.name for instrument in instruments],
+                'program_number': [ instrument.program for instrument in instruments],
+                'num_notes': [ len(instrument.notes) for instrument in instruments] ,
+                'time_signature': time_signature,
+                'has_more_than_one_time_signature': has_more_than_one_time_signature,
+                'has_more_than_one_tempo': has_more_than_one_tempo,
+                'tempo': avg_tempo,
+                'duration': duration
+            })
             return {
                 'filename': filename,
                 'instrument': [instrument.name for instrument in instruments],
@@ -41,6 +54,7 @@ def process_midi_file(folder_path, filename):
                 'tempo': avg_tempo,
                 'duration': duration
             }
+            
         except Exception as e:
             print(f"Error processing {filename}: {e}")
             return {'error': filename}
@@ -119,16 +133,16 @@ def plot_visualizations(df):
 
 def main():
     # Pasta com arquivos MIDI
-    folder_path = 'XMIDI_Dataset'
+    folder_path = '/home/your_email/your_email/figaro/figaro-supplementary/samples3/checkpoint/max_iter=8000,max_bars=32'
     
     # Analisar arquivos MIDI
     midi_dataframe = analyze_midi_files(folder_path)
     
-    # Salvar dados em CSV (opcional)
-    midi_dataframe.to_csv('midi_analysis_results.csv', index=False)
+    # # Salvar dados em CSV (opcional)
+    midi_dataframe.to_csv('midi_analysis_check_results.csv', index=False)
     
-    # Plotar visualizações
-    plot_visualizations(midi_dataframe)
+    # # Plotar visualizações
+    # plot_visualizations(midi_dataframe)
 
 if __name__ == "__main__":
     main()
