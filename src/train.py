@@ -14,23 +14,23 @@ progress_bar = TQDMProgressBar(refresh_rate=5)  # Set the refresh rate as needed
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/figaro/figaro-supplementary/data')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/home/your_email/figaro/figaro-supplementary/outputs')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/data_pure')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/outputs')
 LOGGING_DIR = os.getenv('LOGGING_DIR', './logs')
 MAX_N_FILES = int(os.getenv('MAX_N_FILES', -1))
 
-MODEL = os.getenv('MODEL', None)
-MODEL_NAME = os.getenv('MODEL_NAME', None)
+MODEL = os.getenv('MODEL', 'figaro')
+MODEL_NAME = os.getenv('MODEL_NAME', 'figaro')
 N_CODES = int(os.getenv('N_CODES', 2048))
 N_GROUPS = int(os.getenv('N_GROUPS', 16))
 D_MODEL = int(os.getenv('D_MODEL', 512))
 D_LATENT = int(os.getenv('D_LATENT', 1024))
 
 CHECKPOINT = os.getenv('CHECKPOINT', None)
-VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', None)
+VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/figaro/figaro-supplementary/outputs/vq-vae/step=9543-valid_loss=0.94.ckpt')
 
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))
-TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 128))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 50))
+TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 512))
 
 EPOCHS = int(os.getenv('EPOCHS', '16'))
 WARMUP_STEPS = int(float(os.getenv('WARMUP_STEPS', 4000)))
@@ -38,7 +38,7 @@ MAX_STEPS = int(float(os.getenv('MAX_STEPS', 1e20)))
 MAX_TRAINING_STEPS = int(float(os.getenv('MAX_TRAINING_STEPS', 100_000)))
 LEARNING_RATE = float(os.getenv('LEARNING_RATE', 1e-4))
 LR_SCHEDULE = os.getenv('LR_SCHEDULE', 'const')
-CONTEXT_SIZE = int(os.getenv('CONTEXT_SIZE', 256))
+CONTEXT_SIZE = int(os.getenv('CONTEXT_SIZE', 512))
 
 ACCUMULATE_GRADS = max(1, TARGET_BATCH_SIZE//BATCH_SIZE)
 
@@ -65,13 +65,13 @@ def main():
     'baseline',
   ]
 
-  MODEL = "figaro-expert"
   assert MODEL is not None, 'the MODEL needs to be specified'
   assert MODEL in available_models, f'unknown MODEL: {MODEL}'
 
+  print(MODEL)
 
   ### Create data loaders ###
-  midi_files = glob.glob(os.path.join(ROOT_DIR, '**/*.mid'), recursive=True)
+  midi_files = glob.glob(os.path.join(ROOT_DIR, '*.mid'), recursive=True)
   if MAX_N_FILES > 0:
     midi_files = midi_files[:MAX_N_FILES]
 
@@ -111,7 +111,10 @@ def main():
       'baseline': Seq2SeqModule,
     }[MODEL]
     model = model_class.load_from_checkpoint(checkpoint_path=CHECKPOINT)
-
+    model.freeze_layers([
+        model.transformer.encoder
+    ])
+    
   else:
     seq2seq_kwargs = {
       'encoder_layers': 4,
@@ -191,13 +194,14 @@ def main():
     pin_memory=True
   )
 
+  print(f"check path {os.path.join(OUTPUT_DIR, MODEL)}")
   checkpoint_callback = pl.callbacks.model_checkpoint.ModelCheckpoint(
     monitor='valid_loss',
     dirpath=os.path.join(OUTPUT_DIR, MODEL),
     filename='{step}-{valid_loss:.2f}',
     save_last=True,
     save_top_k=2,
-    every_n_train_steps=1000,
+    mode='min'
   )
 
   lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
@@ -214,6 +218,7 @@ def main():
       }
   )
 
+  num_batches = len(midi_files) // BATCH_SIZE
   trainer = pl.Trainer(
     gpus=2,  # Use 2 GPUs
     strategy='ddp',  # Use Distributed Data Parallel
@@ -224,11 +229,8 @@ def main():
     max_steps=MAX_TRAINING_STEPS,
     log_every_n_steps=max(100, min(25*ACCUMULATE_GRADS, 200)),
     val_check_interval=max(500, min(300*ACCUMULATE_GRADS, 1000)),
-    limit_val_batches=32,  # Reduce validation batches
-    auto_scale_batch_size=False,
-    auto_lr_find=False,
+    limit_val_batches=64,
     accumulate_grad_batches=ACCUMULATE_GRADS,
-    stochastic_weight_avg=True,
     gradient_clip_val=1.0, 
     terminate_on_nan=True,
     resume_from_checkpoint=CHECKPOINT,

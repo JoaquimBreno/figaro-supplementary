@@ -6,3 +6,6 @@ samples*
 selected_balance/
 samples3/
 *.csv
+*.mid
+*.MID
+data_pure/

@@ -18,6 +18,9 @@ from constants import (
 CACHE_PATH = os.getenv('CACHE_PATH', os.getenv('SCRATCH', os.getenv('TMPDIR', './temp')))
 LATENT_CACHE_PATH = os.getenv('LATENT_CACHE_PATH', os.path.join(os.getenv('SCRATCH', os.getenv('TMPDIR', './temp')), 'latent'))
 
+print(f"Using cache path: {CACHE_PATH}")
+print(f"Using latent cache path: {LATENT_CACHE_PATH}")
+
 class MidiDataModule(pl.LightningDataModule):
   def __init__(self, 
                files,
@@ -26,7 +29,7 @@ class MidiDataModule(pl.LightningDataModule):
                num_workers=4,
                pin_memory=True, 
                description_flavor='none',
-               train_val_test_split=(0.95, 0.1, 0.05), 
+               train_val_test_split=(0.8, 0.1, 0.1), 
                vae_module=None,
                **kwargs):
     super().__init__()

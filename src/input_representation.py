@@ -104,7 +104,7 @@ class InputRepresentation():
           pedal_pressed = False
           pedals.append(Item(name='Pedal', start=start, end=e.time))
           start = e.time
-
+          
       notes = instrument.notes
       notes.sort(key=lambda x: (x.start, x.pitch))
 

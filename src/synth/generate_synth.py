@@ -4,11 +4,10 @@ import os
 import gc
 import warnings
 from multiprocessing import Pool
-from functools import partial
 from tqdm import tqdm
 import pretty_midi
 import numpy as np
-
+from functools import partial
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -53,7 +52,7 @@ def save_beat_sequence(beat_sequence, output_path):
     except Exception as e:
         print(f"Error saving beat sequence: {e}")
 
-def generate_audio_safely(pm, sample_rate=44100):
+def generate_audio_safely(pm, sample_rate=22050):
     try:
         # Reduce quality to save memory
         audio = pm.fluidsynth(fs=sample_rate)
@@ -64,31 +63,31 @@ def generate_audio_safely(pm, sample_rate=44100):
 
 def run_synth(folder_path, file):
     filepath = os.path.join(folder_path, file)
-    
+    print(f"Processing {file}")
     try:
         # Load MIDI with error handling
         pm = pretty_midi.PrettyMIDI(filepath)
-        
+        print("MIDI loaded")
         # Generate audio safely
         audio = generate_audio_safely(pm)
-        
+        print("Audio generated")
         if audio is not None:
             # Save WAV
             wav_output_path = os.path.join(folder_path, "wav", file.replace('.mid', '.wav'))
             os.makedirs(os.path.dirname(wav_output_path), exist_ok=True)
             sf.write(wav_output_path, audio, 44100)
-        
+            print("WAV saved")
+        del audio
         # Extract beats
+        print("Extracting beats")
         beat_sequence = extract_beats_and_downbeats(pm)
         
         # Save beat sequence
         beat_output_path = os.path.join(folder_path, "beats", file.replace('.mid', '.txt'))
         save_beat_sequence(beat_sequence, beat_output_path)
-        
+        print("Beats saved")
         # Memory cleanup
-        del pm
-        del audio
-        gc.collect()
+        del pm, beat_sequence
         
         return file
     
@@ -125,22 +124,24 @@ def processing_pool(path):
     print(f"{len(files_to_process)} files left to process")
     
     # Define number of workers - use all available CPU cores
-    max_workers = os.cpu_count()-4
+    max_workers = os.cpu_count()
     
     print(f"Processing {len(files_to_process)} files using {max_workers} workers")
     
+    results = []
+    for i in files_to_process:
+        results.append(run_synth(path, i))
     # Prepare processing function
-    process_func = partial(run_synth, path)
+    # process_func = partial(run_synth, path)
     
-    # Parallel processing
-    with Pool(processes=max_workers) as pool:
-        results = list(tqdm(pool.imap_unordered(process_func, files_to_process), total=len(files_to_process)))
+    # # Parallel processing
+    # with Pool(processes=max_workers) as pool:
+    #     results = list(tqdm(pool.imap_unordered(process_func, files_to_process), total=len(files_to_process)))
     
     processed_files_count = len([r for r in results if r is not None])
     print(f"Successfully processed {processed_files_count} files")
     
-    # Free memory
-    gc.collect()
+
 
 # Path to MIDI files
 path = '/home/your_email/your_email/figaro/figaro-supplementary/selected_balance'

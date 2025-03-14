@@ -405,3 +405,8 @@ class Seq2SeqModule(pl.LightningModule):
         'bar_ids': bar_ids,
         'position_ids': position_ids
     }
+  def freeze_layers(self, layers):
+    # Set requires_grad = False for all parameters in the specified layers
+    for layer in layers:
+        for param in layer.parameters():
+            param.requires_grad = False

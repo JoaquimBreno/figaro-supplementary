@@ -5,6 +5,11 @@ import time
 import torch
 import random
 from torch.utils.data import DataLoader
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+
 import pandas as pd
 from models.vae import VqVaeModule
 from models.seq2seq import Seq2SeqModule
@@ -29,10 +34,8 @@ N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 16))
   
 CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/your_email/figaro/figaro-supplementary/outputs/figaro-expert/step=37999-valid_loss=0.94.ckpt")
 VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/checkpoints/vq-vae.ckpt')
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 2))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def trim_midi(midi_obj, target_duration):
     for instrumento in midi_obj.instruments:
@@ -57,19 +60,16 @@ def get_midi_duration(midi_obj):
             total_time = max(total_time, instrumento_duration)
     return total_time
   
-def setup_model(checkpoint_path):
+def setup_model(checkpoint_path, rank):
     model = Seq2SeqModule.load_from_checkpoint(checkpoint_path)
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs!")
-        model = nn.DataParallel(model)
-    actual_model = model.module if isinstance(model, nn.DataParallel) else model
-    actual_model.to(device)
-    actual_model.freeze()
-    actual_model.eval()
+    model.to(rank)
+    model.freeze()
+    model.eval()
     
-    return actual_model
+    return model
   
 def reconstruct_sample(model, batch, 
+  rank,
   initial_context=1, 
   output_dir=None, 
   max_iter=-1, 
@@ -80,12 +80,12 @@ def reconstruct_sample(model, batch,
     
   batch_size, seq_len = batch['input_ids'].shape[:2]
 
-  batch_ = { key: batch[key][:, :initial_context].to(device) for key in ['input_ids', 'bar_ids', 'position_ids'] }
+  batch_ = { key: batch[key][:, :initial_context].to(rank) for key in ['input_ids', 'bar_ids', 'position_ids'] }
   if model.description_flavor in ['description', 'both']:
-    batch_['description'] = batch['description'].to(device)
-    batch_['desc_bar_ids'] = batch['desc_bar_ids'].to(device)
+    batch_['description'] = batch['description'].to(rank)
+    batch_['desc_bar_ids'] = batch['desc_bar_ids'].to(rank)
   if model.description_flavor in ['latent', 'both']:
-    batch_['latents'] = batch['latents'].to(device)
+    batch_['latents'] = batch['latents'].to(rank)
 
   max_len = seq_len + 1024
   if max_iter > 0:
@@ -172,12 +172,43 @@ def get_processed_files(path):
     processed_files = set()
     for filename in os.listdir(path):
       processed_files.add(filename[1:])
-    print(processed_files)
     return processed_files
   
-def main():
-  print(f"Using device: {device}")
-  
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize the distributed environment
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
+def split_midi_files_based_on_rank(midi_files, rank, world_size):
+    """
+    Splits the list of MIDI files based on the rank of the process.
+    Each process gets a roughly equal portion of the files.
+    """
+    # Determine total number of files and the number to handle per rank
+    total_files = len(midi_files)
+    files_per_rank = total_files // world_size
+    
+    # Determine starting and ending index for this rank
+    start_index = rank * files_per_rank
+    if rank == world_size - 1:  # Last rank takes any remaining files
+        end_index = total_files
+    else:
+        end_index = start_index + files_per_rank
+    print(f"Rank {rank} handling files {start_index} to {end_index}")
+    # Return the subset of files for this rank
+    return midi_files[start_index:end_index]
+    
+def distributed_main(rank, world_size):
+  print(f"Running DDP on rank {rank}.")
+  print(f"World size: {world_size}")
+  setup(rank, world_size)
+  # Set the device for this process
+  torch.cuda.set_device(rank)
   if MAKE_MEDLEYS:
     max_bars = N_MEDLEY_PIECES * N_MEDLEY_BARS
   else:
@@ -199,7 +230,7 @@ def main():
   print(f"Saving generated files to: {output_dir}")
 
   if VAE_CHECKPOINT:
-    vae_module = VqVaeModule.load_from_checkpoint(VAE_CHECKPOINT).to(device)
+    vae_module = VqVaeModule.load_from_checkpoint(VAE_CHECKPOINT).to(rank)
     vae_module.eval()
   else:
     vae_module = None
@@ -214,7 +245,7 @@ def main():
   else:
       print(f"O caminho {CHECKPOINT} não é um arquivo ou não existe.")
 
-  model = setup_model(CHECKPOINT)
+  model = setup_model(CHECKPOINT,rank)
   # model = Seq2SeqModule.load_from_checkpoint(CHECKPOINT)
   # model.to(device)
   # model.freeze()
@@ -231,14 +262,14 @@ def main():
   print(f"Found {len(files_to_process)} files to process")
   
   midi_files = [os.path.join(ROOT_DIR, name) for name in files_to_process]
-  
-  dm = model.get_datamodule(midi_files, vae_module=vae_module)
+  midi_files_update = split_midi_files_based_on_rank(midi_files, rank, world_size)
+  dm = model.get_datamodule(midi_files_update, vae_module=vae_module)
   dm.setup('test')
   midi_files = dm.test_ds.files
   random.shuffle(midi_files)
 
-  if MAX_N_FILES > 0:
-    midi_files = midi_files[:MAX_N_FILES]
+  # if MAX_N_FILES > 0:
+  #   midi_files = midi_files[:MAX_N_FILES]
 
 
   description_options = None
@@ -253,10 +284,12 @@ def main():
     max_bars=model.context_size,
     vae_module=vae_module
   )
-
+  
 
   start_time = time.time()
   coll = SeqCollator(context_size=-1)
+  #sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
+    
   dl = DataLoader(dataset, batch_size=BATCH_SIZE, collate_fn=coll)
 
   if MAKE_MEDLEYS:
@@ -267,14 +300,26 @@ def main():
     )
   
   with torch.no_grad():
-    for batch in tqdm.tqdm(dl, total=len(dl)): 
-      reconstruct_sample(model, batch, 
+    for batch in tqdm.tqdm(dl, total=len(dl), desc=f'Rank {rank}', position=rank): 
+      reconstruct_sample(model, batch, rank,
         output_dir=output_dir, 
         max_iter=MAX_ITER, 
         max_bars=max_bars,
         target_duration= 40,
         verbose=VERBOSE,
       )
+  cleanup()
+      
+def main():
+  world_size = torch.cuda.device_count()
+  print(f"World size: {world_size}")  
+  
+  mp.spawn(
+      distributed_main, 
+      args=(world_size,), 
+      nprocs=world_size
+  )
+
 
 if __name__ == '__main__':
   main()
