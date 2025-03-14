@@ -6,3 +6,9 @@ samples*
 selected_balance/
 samples3/
 *.csv
+data_pure/
+*.mid
+*.MID
+
+teste.ipynb
+figaro.ipynb
