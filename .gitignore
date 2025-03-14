@@ -7,14 +7,20 @@ selected_balance/
 samples3/
 *.csv
 <<<<<<< HEAD
+<<<<<<< HEAD
 *.mid
 *.MID
 data_pure/
 =======
+=======
+>>>>>>> changes-temp
 data_pure/
 *.mid
 *.MID
 
 teste.ipynb
 figaro.ipynb
+<<<<<<< HEAD
 >>>>>>> f2667d5 (changes)
+=======
+>>>>>>> changes-temp
