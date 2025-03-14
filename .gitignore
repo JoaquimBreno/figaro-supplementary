@@ -6,6 +6,15 @@ samples*
 selected_balance/
 samples3/
 *.csv
+<<<<<<< HEAD
 *.mid
 *.MID
 data_pure/
+=======
+data_pure/
+*.mid
+*.MID
+
+teste.ipynb
+figaro.ipynb
+>>>>>>> f2667d5 (changes)
