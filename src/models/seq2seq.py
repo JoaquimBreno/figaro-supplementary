@@ -40,7 +40,7 @@ class Seq2SeqModule(pl.LightningModule):
                d_latent=512,
                n_codes=512,
                n_groups=8,
-               context_size=512,
+               context_size=1024,  # Changed default from 512 to 1024
                lr=1e-4,
                lr_schedule='sqrt_decay',
                warmup_steps=None,
@@ -95,7 +95,7 @@ class Seq2SeqModule(pl.LightningModule):
 
 
     self.max_bars = self.context_size
-    self.max_positions = 512
+    self.max_positions = 1024  # Changed from 512 to 1024
     self.bar_embedding = nn.Embedding(self.max_bars + 1, self.d_model)
     self.pos_embedding = nn.Embedding(self.max_positions + 1, self.d_model)
 
@@ -130,35 +130,50 @@ class Seq2SeqModule(pl.LightningModule):
     )
 
   def encode(self, z, desc_bar_ids=None):
-    if self.description_flavor == 'both':
-      desc = z['description']
-      latent = z['latents']
-      desc_emb = self.desc_in(desc)
-      latent_emb = self.latent_in(latent)
+    try:
+      if self.description_flavor == 'both':
+        desc = z['description']
+        latent = z['latents']
+        
+        desc_emb = self.desc_in(desc)
+        latent_emb = self.latent_in(latent)
+        #print(f"desc_emb shape: {desc_emb.shape}, latent_emb shape: {latent_emb.shape}")
+        # Simple approach: just truncate the longer sequence to match the shorter one
+        if desc_emb.size(1) > latent_emb.size(1):
+            desc_emb = desc_emb[:, :latent_emb.size(1), :]
+        elif latent_emb.size(1) > desc_emb.size(1):
+            latent_emb = latent_emb[:, :desc_emb.size(1), :]
+        
+        # Ensure desc_bar_ids matches desc_emb length
+        if desc_bar_ids is not None:
+            desc_bar_ids = desc_bar_ids[:, :desc_emb.size(1)]
+            desc_emb = desc_emb + self.bar_embedding(desc_bar_ids)
+        #print(f"desc_emb shape after bar embedding: {desc_emb.shape}, latent_emb shape after bar embedding: {latent_emb.shape}")
+        # Now they have the same shape, concatenate along the feature dimension
+        z_emb = self.desc_proj(torch.cat([desc_emb, latent_emb], dim=-1))
+
+      elif self.description_flavor == 'description':
+        z_emb = self.desc_in(z)
+        if desc_bar_ids is not None:
+          z_emb += self.bar_embedding(desc_bar_ids)
+
+      elif self.description_flavor == 'latent':
+        z_emb = self.latent_in(z)
+
+      else:
+        return None
+
+      out = self.transformer.encoder(inputs_embeds=z_emb, output_hidden_states=True)
+      encoder_hidden = out.hidden_states[-1]
+      return encoder_hidden
+    except Exception as e:
+      # Get batch info to identify problematic files
+      if hasattr(self, 'current_batch_files') and self.current_batch_files:
+        print(f"\n\nERROR in encode method with files: {self.current_batch_files}")
+      print(f"Error details: {str(e)}")
       
-      padded = pad_sequence([desc_emb.transpose(0, 1), latent_emb.transpose(0, 1)], batch_first=True)
-      desc_emb, latent_emb = padded.transpose(1, 2)
-
-      if desc_bar_ids is not None:
-        # Use the fact that description is always longer than latents
-        desc_emb = desc_emb + self.bar_embedding(desc_bar_ids)
-
-      z_emb = self.desc_proj(torch.cat([desc_emb, latent_emb], dim=-1))
-
-    elif self.description_flavor == 'description':
-      z_emb = self.desc_in(z)
-      if desc_bar_ids is not None:
-        z_emb += self.bar_embedding(desc_bar_ids)
-
-    elif self.description_flavor == 'latent':
-      z_emb = self.latent_in(z)
-
-    else:
-      return None
-
-    out = self.transformer.encoder(inputs_embeds=z_emb, output_hidden_states=True)
-    encoder_hidden = out.hidden_states[-1]
-    return encoder_hidden
+      # Re-raise the exception
+      raise
 
   def decode(self, x, labels=None, bar_ids=None, position_ids=None, encoder_hidden_states=None, return_hidden=False):
     seq_len = x.size(1)
@@ -250,6 +265,10 @@ class Seq2SeqModule(pl.LightningModule):
       return loss
   
   def training_step(self, batch, batch_idx):
+    if 'file_paths' in batch:
+      self.current_batch_files = batch['file_paths']
+    else:
+      self.current_batch_files = None
     loss = self.get_loss(batch)
     self.log('train_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True, sync_dist=True)
     return loss

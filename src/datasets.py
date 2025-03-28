@@ -116,7 +116,7 @@ def _get_split(files, worker_info):
 
 
 class SeqCollator:
-  def __init__(self, pad_token=0, context_size=512):
+  def __init__(self, pad_token=0, context_size=1024):  # Changed default from 512 to 1024
     self.pad_token = pad_token
     self.context_size = context_size
 
@@ -128,7 +128,7 @@ class SeqCollator:
 
     if self.context_size > 0:
       max_len = self.context_size
-      max_desc_len = self.context_size
+      max_desc_len = 1024  # Changed from context_size to 1024
     else:
       max_len = xs.size(1)
       max_desc_len = int(1e4)
@@ -141,7 +141,10 @@ class SeqCollator:
     
     batch['input_ids'] = xs
     batch['labels'] = labels
-
+    
+    if 'file_path' in features[0]:
+      batch['file_paths'] = [feature['file_path'] for feature in features]
+    
     if 'position_ids' in features[0]:
       position_ids = [feature['position_ids'] for feature in features]
       position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0)
@@ -238,7 +241,10 @@ class MidiDataset(IterableDataset):
       return len(self.files)
 
   def __getitem__(self, index):
+      file_path = self.files[index]
+      
       print(f"Fetching item at index: {index}")
+      return file_path
       
   def __iter__(self):
     worker_info = torch.utils.data.get_worker_info()

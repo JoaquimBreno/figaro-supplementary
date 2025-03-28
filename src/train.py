@@ -23,22 +23,22 @@ MODEL = os.getenv('MODEL', 'figaro')
 MODEL_NAME = os.getenv('MODEL_NAME', 'figaro')
 N_CODES = int(os.getenv('N_CODES', 2048))
 N_GROUPS = int(os.getenv('N_GROUPS', 16))
-D_MODEL = int(os.getenv('D_MODEL', 512))
+D_MODEL = int(os.getenv('D_MODEL', 1024))
 D_LATENT = int(os.getenv('D_LATENT', 1024))
 
 CHECKPOINT = os.getenv('CHECKPOINT', None)
 VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/figaro/figaro-supplementary/outputs/vq-vae/step=9543-valid_loss=0.94.ckpt')
 
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 50))
-TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 512))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 3))
+TARGET_BATCH_SIZE = int(os.getenv('TARGET_BATCH_SIZE', 16))
 
-EPOCHS = int(os.getenv('EPOCHS', '16'))
+EPOCHS = int(os.getenv('EPOCHS', '10'))
 WARMUP_STEPS = int(float(os.getenv('WARMUP_STEPS', 4000)))
 MAX_STEPS = int(float(os.getenv('MAX_STEPS', 1e20)))
 MAX_TRAINING_STEPS = int(float(os.getenv('MAX_TRAINING_STEPS', 100_000)))
 LEARNING_RATE = float(os.getenv('LEARNING_RATE', 1e-4))
 LR_SCHEDULE = os.getenv('LR_SCHEDULE', 'const')
-CONTEXT_SIZE = int(os.getenv('CONTEXT_SIZE', 512))
+CONTEXT_SIZE = int(os.getenv('CONTEXT_SIZE', 1024))
 
 ACCUMULATE_GRADS = max(1, TARGET_BATCH_SIZE//BATCH_SIZE)
 
@@ -71,7 +71,13 @@ def main():
   print(MODEL)
 
   ### Create data loaders ###
-  midi_files = glob.glob(os.path.join(ROOT_DIR, '*.mid'), recursive=True)
+  midi_files = glob.glob(os.path.join('temp', 'latent', '*.mid'), recursive=True)
+  
+  print(midi_files[0])
+  # Filter midi_files to only include those that are in the latent_midi_set
+  midi_files = [file.replace('temp/latent', ROOT_DIR) for file in midi_files ]
+  print("EXAMPLE",midi_files[0])
+  print("LENGTH OF MIDI FILES", len(midi_files))
   if MAX_N_FILES > 0:
     midi_files = midi_files[:MAX_N_FILES]
 

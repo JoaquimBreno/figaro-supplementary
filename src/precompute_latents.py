@@ -12,14 +12,16 @@ from datasets import MidiDataset, SeqCollator
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # device = torch.device('cpu')
-ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/data_pure')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/sertanejo')
 MAX_N_FILES = int(os.getenv('MAX_N_FILES', '400000'))
 
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '10'))
 
+# Calculate workers more intelligently for multi-GPU setup
 N_WORKERS = min(os.cpu_count(), float(os.getenv('N_WORKERS', 'inf')))
 if device.type == 'cuda':
-  N_WORKERS = min(N_WORKERS, 8*torch.cuda.device_count())
+    n_gpus = torch.cuda.device_count()
+    N_WORKERS = min(N_WORKERS, 8*n_gpus)
 N_WORKERS = int(N_WORKERS)
 LATENT_CACHE_PATH = os.getenv('LATENT_CACHE_PATH', os.path.join('./temp', 'latent'))
 os.makedirs(LATENT_CACHE_PATH, exist_ok=True)
@@ -27,7 +29,11 @@ os.makedirs(LATENT_CACHE_PATH, exist_ok=True)
 
 def process_files(rank, world_size, files, vae_checkpoint):
     # Set the GPU for this process
-    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)  # Explicitly set GPU device
+        device = torch.device(f'cuda:{rank}')
+    else:
+        device = torch.device('cpu')
     
     # Load VAE model on this device
     vae_module = VqVaeModule.load_from_checkpoint(checkpoint_path=vae_checkpoint).to(device)
@@ -43,6 +49,9 @@ def process_files(rank, world_size, files, vae_checkpoint):
     process_files = files[start_idx:end_idx]
     
     print(f"GPU {rank} processing {len(process_files)} files ({start_idx} to {end_idx-1})")
+    
+    # Calculate workers per GPU to avoid oversubscription
+    workers_per_gpu = max(1, N_WORKERS // world_size)
     
     for i, file in enumerate(process_files):
         print(f"GPU {rank} - {i:4d}/{len(process_files)}: {file} ", end='')
@@ -66,41 +75,53 @@ def process_files(rank, world_size, files, vae_checkpoint):
         dl = DataLoader(ds, 
             collate_fn=collator, 
             batch_size=BATCH_SIZE, 
-            num_workers=N_WORKERS // world_size, 
+            num_workers=workers_per_gpu, 
             pin_memory=True
         )
 
         latents, codes = [], []
-        for batch in dl:
-            x = batch['input_ids'].to(device)
-
-            out = vae_module.encode(x)
-            latents.append(out['z'])
-            codes.append(out['codes'])
-        
-        if len(latents) == 0:
-            continue
-            
-        latents = torch.cat(latents).cpu()
-        codes = torch.cat(codes).cpu()
-        print(f'(caching latents: {latents.size(0)} bars)')
-
-        # Try to store the computed representation in the cache directory
         try:
-            pickle.dump((latents, codes), open(cache_file, 'wb'))
-        except Exception as err:
-            print('Unable to cache file:', str(err))
+            for batch in dl:
+                x = batch['input_ids'].to(device)
+
+                out = vae_module.encode(x)
+                latents.append(out['z'])
+                codes.append(out['codes'])
+            
+            if len(latents) == 0:
+                continue
+                
+            latents = torch.cat(latents).cpu()
+            codes = torch.cat(codes).cpu()
+            print(f'(caching latents: {latents.size(0)} bars)')
+
+            # Try to store the computed representation in the cache directory
+            try:
+                pickle.dump((latents, codes), open(cache_file, 'wb'))
+            except Exception as err:
+                print('Unable to cache file:', str(err))
+        except Exception as e:
+            print(f"\nError processing file {file} on GPU {rank}: {str(e)}")
+            continue
 
 
 if __name__ == "__main__":
     ### Create data loaders ###
     midi_files = glob.glob(os.path.join(ROOT_DIR, '**/*.mid'), recursive=True)
     if MAX_N_FILES > 0:
-        midi_files = midi_files[200000:MAX_N_FILES]
+        midi_files = midi_files[0:-1]
+
+    # Filter out already processed files in a single pass
+    midi_files = [
+        file for file in midi_files 
+        if not os.path.exists(os.path.join(LATENT_CACHE_PATH, os.path.basename(file)))
+    ]
 
     # Shuffle files for approximate parallelizability
     random.shuffle(midi_files)
 
+    print(f"Number of unprocessed files: {len(midi_files)}")
+    
     VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/figaro/figaro-supplementary/outputs/vq-vae/step=9543-valid_loss=0.94.ckpt')
     
     print('***** PRECOMPUTING LATENT REPRESENTATIONS *****')
@@ -110,9 +131,12 @@ if __name__ == "__main__":
     # Use multiple GPUs if available
     n_gpus = torch.cuda.device_count()
     print(f'Number of available GPUs: {n_gpus}')
+    print(f'Workers per process: {max(1, N_WORKERS // n_gpus)}')
     print('***********************************************')
     
     if n_gpus > 1:
+        # Use multiprocessing to parallelize across GPUs
+        mp.set_start_method('spawn', force=True)  # Ensures proper CUDA initialization
         mp.spawn(
             process_files,
             args=(n_gpus, midi_files, VAE_CHECKPOINT),

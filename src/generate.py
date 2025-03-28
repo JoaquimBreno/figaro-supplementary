@@ -22,8 +22,8 @@ import torch.nn as nn
 
 MODEL = os.getenv('MODEL', '')
 
-ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/data')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', './samples4')
+ROOT_DIR = os.getenv('ROOT_DIR', '/home/your_email/your_email/figaro/figaro-supplementary/sertanejo')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', './sertanejo_samples')
 MAX_N_FILES = int(float(os.getenv('MAX_N_FILES', -1)))
 MAX_ITER = int(os.getenv('MAX_ITER', 16000))
 MAX_BARS = int(os.getenv('MAX_BARS', 200))
@@ -32,8 +32,8 @@ MAKE_MEDLEYS = False
 N_MEDLEY_PIECES = int(os.getenv('N_MEDLEY_PIECES', 2))
 N_MEDLEY_BARS = int(os.getenv('N_MEDLEY_BARS', 16))
   
-CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/your_email/figaro/figaro-supplementary/outputs/figaro-expert/step=37999-valid_loss=0.94.ckpt")
-VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/checkpoints/vq-vae.ckpt')
+CHECKPOINT = os.getenv('CHECKPOINT', "/home/your_email/your_email/figaro/figaro-supplementary/outputs/figaro/step=46209-valid_loss=0.60.ckpt")
+VAE_CHECKPOINT = os.getenv('VAE_CHECKPOINT', '/home/your_email/your_email/figaro/figaro-supplementary/outputs/vq-vae/step=9543-valid_loss=0.94.ckpt')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1))
 VERBOSE = int(os.getenv('VERBOSE', 2))
 
@@ -114,31 +114,31 @@ def reconstruct_sample(model, batch,
       duration = get_midi_duration(pm_hat)
       
       # Se a duração for muito curta, tenta gerar novamente
-      attempts = 0
-      while duration < target_duration * 0.9 and attempts < 4:
-          if verbose:
-            print(f"Duration too short ({duration:.2f} < {target_duration * 0.9:.2f}), generating again...")
-          sample = model.sample(batch_, max_length=max_len * 2, max_bars=max_bars * 2, verbose=verbose//2)
-          new_xs_hat = sample['sequences'].detach().cpu()
-          new_events_hat = [model.vocab.decode(x) for x in new_xs_hat]
-          new_pm_hat = remi2midi(new_events_hat[0])
-          for i, instrumento in enumerate(new_pm_hat.instruments):
-              if i < len(pm_hat.instruments):
-                  # Ajusta o tempo de início das novas notas para concaternar corretamente
-                  offset = duration
-                  for note in instrumento.notes:
-                      note.start += offset
-                      note.end += offset
-                  pm_hat.instruments[i].notes.extend(instrumento.notes)
-                  pm_hat.instruments[i].pitch_bends.extend(
-                      [copy.deepcopy(pb) for pb in instrumento.pitch_bends]
-                  )
-                  pm_hat.instruments[i].control_changes.extend(
-                      [copy.deepcopy(cc) for cc in instrumento.control_changes]
-                  )
-          duration = get_midi_duration(pm_hat)
-          print(f"New duration: {duration:.2f}")
-          attempts += 1
+      # attempts = 0
+      # while duration < target_duration * 0.9 and attempts < 4:
+      #     if verbose:
+      #       print(f"Duration too short ({duration:.2f} < {target_duration * 0.9:.2f}), generating again...")
+      #     sample = model.sample(batch_, max_length=max_len * 2, max_bars=max_bars * 2, verbose=verbose//2)
+      #     new_xs_hat = sample['sequences'].detach().cpu()
+      #     new_events_hat = [model.vocab.decode(x) for x in new_xs_hat]
+      #     new_pm_hat = remi2midi(new_events_hat[0])
+      #     for i, instrumento in enumerate(new_pm_hat.instruments):
+      #         if i < len(pm_hat.instruments):
+      #             # Ajusta o tempo de início das novas notas para concaternar corretamente
+      #             offset = duration
+      #             for note in instrumento.notes:
+      #                 note.start += offset
+      #                 note.end += offset
+      #             pm_hat.instruments[i].notes.extend(instrumento.notes)
+      #             pm_hat.instruments[i].pitch_bends.extend(
+      #                 [copy.deepcopy(pb) for pb in instrumento.pitch_bends]
+      #             )
+      #             pm_hat.instruments[i].control_changes.extend(
+      #                 [copy.deepcopy(cc) for cc in instrumento.control_changes]
+      #             )
+      #     duration = get_midi_duration(pm_hat)
+      #     print(f"New duration: {duration:.2f}")
+      #     attempts += 1
       
       # Se a duração for muito longa, corta
       # if duration > target_duration * 1.4:
@@ -252,18 +252,21 @@ def distributed_main(rank, world_size):
   # model.eval()
 
 
-  #midi_files = glob.glob(os.path.join(ROOT_DIR, '**/*.mid'), recursive=True)
-  midis_names = pd.read_csv('/home/your_email/your_email/figaro/figaro-supplementary/balanced_significant_midi_instances_expanded.csv')
-  midis_names = midis_names['filename'].tolist()
-  processed_files = get_processed_files(output_dir)
-  print(f"Found {len(midis_names)} MIDI files")
-  print(f"Found {len(processed_files)} already processed files")
-  files_to_process = [f for f in midis_names if f not in processed_files]
-  print(f"Found {len(files_to_process)} files to process")
+  midi_files = glob.glob(os.path.join(ROOT_DIR, '**/*.mid'), recursive=True)
+  midi_files = [midi_file for midi_file in midi_files if os.path.exists(midi_file.replace(ROOT_DIR, "./temp/latent"))]
+
+  # midis_names = pd.read_csv('/home/your_email/your_email/figaro/figaro-supplementary/balanced_significant_midi_instances_expanded.csv')
+  # midis_names = midis_names['filename'].tolist()
+  # processed_files = get_processed_files(output_dir)
+  # print(f"Found {len(midis_names)} MIDI files")
+  # print(f"Found {len(processed_files)} already processed files")
+  # files_to_process = [f for f in midis_names if f not in processed_files]
+  # print(f"Found {len(files_to_process)} files to process")
   
-  midi_files = [os.path.join(ROOT_DIR, name) for name in files_to_process]
-  midi_files_update = split_midi_files_based_on_rank(midi_files, rank, world_size)
-  dm = model.get_datamodule(midi_files_update, vae_module=vae_module)
+  # midi_files = [os.path.join(ROOT_DIR, name) for name in files_to_process]
+  # midi_files_update = split_midi_files_based_on_rank(midi_files, rank, world_size)
+  # dm = model.get_datamodule(midi_files_update, vae_module=vae_module)
+  dm = model.get_datamodule(midi_files, vae_module=vae_module)
   dm.setup('test')
   midi_files = dm.test_ds.files
   random.shuffle(midi_files)
